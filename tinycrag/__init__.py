@@ -6,6 +6,7 @@ this package does not load OCR dependencies, PyTorch, or model weights.
 """
 
 from .chunking import WordChunker
+from .generation import GeminiAnswerer
 from .models import (
     Chunk,
     ChunkClassification,
@@ -21,6 +22,7 @@ __all__ = [
     "Chunk",
     "ChunkClassification",
     "DecisionEngine",
+    "GeminiAnswerer",
     "JuliaRetriever",
     "PdfCorpus",
     "PdfLoader",

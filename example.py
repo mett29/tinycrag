@@ -6,7 +6,15 @@ import logging
 import sys
 from pathlib import Path
 
-from tinycrag import JuliaRetriever, PdfLoader, RetrievalPipeline, WordChunker
+from dotenv import load_dotenv
+
+from tinycrag import (
+    GeminiAnswerer,
+    JuliaRetriever,
+    PdfLoader,
+    RetrievalPipeline,
+    WordChunker,
+)
 
 
 def positive_int(value: str) -> int:
@@ -70,6 +78,27 @@ def build_parser() -> argparse.ArgumentParser:
         default="eng",
         help="Tesseract language code (default: eng)",
     )
+    cli.add_argument(
+        "--answer",
+        action="store_true",
+        help="Answer the query with Gemini using the retrieved chunks",
+    )
+    cli.add_argument(
+        "--gemini-api",
+        action="store_true",
+        help="Use the Gemini API (GEMINI_API_KEY) instead of Vertex AI",
+    )
+    cli.add_argument(
+        "--gemini-model",
+        default="gemini-3.5-flash-lite",
+        help="Gemini model used with --answer (default: gemini-3.5-flash-lite)",
+    )
+    cli.add_argument(
+        "--max-chunks",
+        type=positive_int,
+        default=None,
+        help="Send at most this many top-ranked chunks to Gemini (default: all)",
+    )
     return cli
 
 
@@ -88,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         emit log records and leave logging configuration to the host application.
     """
     args = build_parser().parse_args(argv)
+    load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     try:
         pipeline = RetrievalPipeline(
@@ -97,7 +127,11 @@ def main(argv: list[str] | None = None) -> int:
             retriever=JuliaRetriever(args.model),
         )
         result = pipeline.retrieve(args.source, args.query, threshold=args.threshold)
-        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        report = result.to_dict()
+        if args.answer:
+            answerer = GeminiAnswerer(args.gemini_model, enterprise=not args.gemini_api)
+            report["answer"] = answerer.answer(result, max_chunks=args.max_chunks)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

@@ -1,6 +1,6 @@
 # tinycrag (tiny Classifier for RAG)
 
-A small Python library in `tinycrag/`, with an example CLI in `example.py`. It parses PDFs with [LiteParse](https://github.com/run-llama/liteparse/blob/main/packages/python/README.md), splits their text, and independently classifies **every chunk** for relevance to a query using the local [Julia-1](https://huggingface.co/SupersonicLabs/Julia-1) decision model. It retrieves text; it does not generate an answer.
+A small Python library in `tinycrag/`, with an example CLI in `example.py`. It parses PDFs with [LiteParse](https://github.com/run-llama/liteparse/blob/main/packages/python/README.md), splits their text, and independently classifies **every chunk** for relevance to a query using the local [Julia-1](https://huggingface.co/SupersonicLabs/Julia-1) decision model. Optionally, the retrieved chunks can be passed to Gemini (Vertex AI by default, or the Gemini API) to generate a grounded answer.
 
 This project is inspired by [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev), a decision model from TypeSafe. Jev takes a shared piece of context and a typed question (pick one option, rate on a scale, or answer yes/no) and returns probabilities rather than generated text. I wanted to see how that style of judgment fits retrieval-augmented generation (RAG). Instead of embedding documents and ranking them by vector similarity, each chunk is treated as the context and the query as a yes/no question: "is this passage relevant?" The model returns a probability, and a threshold decides what to keep.
 
@@ -35,6 +35,10 @@ Optional flags:
 | `--threshold` | `0.5` | Keep every chunk whose relevance score is at least this value. Lower it to retrieve more chunks. |
 | `--model` | `Julia-1/` next to `example.py` | Local checkpoint directory. |
 | `--ocr-language` | `eng` | Tesseract language code for OCR, e.g. `ita`. |
+| `--answer` | off | Answer the query with Gemini using the retrieved chunks; adds an `answer` field to the report. |
+| `--gemini-api` | off | With `--answer`, use the Gemini API (`GEMINI_API_KEY`) instead of Vertex AI. |
+| `--gemini-model` | `gemini-3.5-flash-lite` | Gemini model used with `--answer`. |
+| `--max-chunks` | all | Send at most this many top-ranked chunks to Gemini. |
 
 Progress goes to stderr; stdout contains one JSON report:
 
@@ -46,6 +50,25 @@ Progress goes to stderr; stdout contains one JSON report:
 The score is Julia's softmax probability for the `relevant` choice, not a calibrated measure of retrieval quality. `selected` follows your threshold and may differ from the model's winning `choice` when the threshold changes. The model is loaded once per CLI run and reused for all chunks. Parsing and classification are repeated on each CLI run; there is no persistent cache.
 
 Strict encoding is enabled with the original 8,192-token context and 512-token question/options budget. Oversized inputs fail explicitly rather than silently dropping text; reduce the chunk size or shorten the query if needed. Parsing errors also fail the run rather than returning incomplete retrieval results. Blank pages create no chunks; PDFs without extractable text produce a warning, and a folder with no extracted text fails.
+
+## Answer generation with Gemini
+
+`--answer` sends the selected chunks (ranked by relevance, labelled with source and page) to Gemini through the [`google-genai`](https://pypi.org/project/google-genai/) SDK. The model is instructed to answer only from those passages and cite them as `[n]`; if nothing was retrieved, no call is made and a fixed message is returned.
+
+```bash
+uv run python example.py --source ./sources --query "How does multi-head attention work?" --answer
+```
+
+`example.py` loads a `.env` file from the working directory (it is gitignored). Two backends are available:
+
+- **Vertex AI (default):** uses Application Default Credentials (`gcloud auth application-default login`) and needs `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`.
+- **Gemini API:** pass `--gemini-api` and set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
+
+```
+GOOGLE_CLOUD_PROJECT=my-project
+GOOGLE_CLOUD_LOCATION=eu
+# GEMINI_API_KEY=...   # only for --gemini-api
+```
 
 ## Python API
 
@@ -88,11 +111,24 @@ for query in ["How does multi-head attention work?", "What optimizer was used?"]
 
 `classify` returns all decisions in input order. `RetrievalResult.matches` returns every selected decision in descending score order. No top-k cutoff is applied. `ChunkClassification.chunk` retains the text, relative source path, page, and chunk index.
 
+To answer the query from the retrieved chunks:
+
+```python
+from tinycrag import GeminiAnswerer
+
+answerer = GeminiAnswerer("gemini-3.5-flash-lite")  # Vertex AI; project/location from env or arguments
+# answerer = GeminiAnswerer(enterprise=False, api_key="...")  # Gemini API
+print(answerer.answer(result, max_chunks=5))
+```
+
+The client is created lazily, so constructing `GeminiAnswerer` needs no credentials. Mixing `enterprise=True` with `api_key`, or `enterprise=False` with `project`/`location`, raises `ValueError`.
+
 | Class | Responsibility |
 | --- | --- |
 | `WordChunker` | Split text into fixed-size, non-overlapping word chunks. |
 | `PdfLoader` | Discover PDFs, run LiteParse/OCR, and return a `PdfCorpus`. |
 | `JuliaRetriever` | Lazily load Julia once and classify supplied chunks. |
+| `GeminiAnswerer` | Build a grounded prompt from `RetrievalResult.matches` and generate an answer with Gemini. |
 | `RetrievalPipeline` | Compose extraction and classification into a `RetrievalResult`. |
 | `Chunk`, `PdfCorpus`, `ChunkClassification` | Immutable data objects for text and decisions. |
 | `RetrievalResult`, `RetrievalTimings` | Ranked matches, all classifications, serialization, and stage timings. |
