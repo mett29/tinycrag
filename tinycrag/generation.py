@@ -3,8 +3,9 @@
 from .models import ChunkClassification, RetrievalResult
 
 DEFAULT_SYSTEM_INSTRUCTION = (
-    "You answer questions using only the numbered context passages provided. "
-    "Cite the passages you rely on as [n]. If the passages do not contain the "
+    "You answer questions using only the context passages provided, each labelled "
+    "with a bracketed source:chunk_index tag. Cite the passages you rely on by "
+    "copying that tag exactly, e.g. [report.pdf:12]. If the passages do not contain the "
     "answer, say so instead of guessing."
 )
 
@@ -81,12 +82,12 @@ class GeminiAnswerer:
             matches: Selected chunks, in the order they should be presented.
 
         Returns:
-            Numbered context passages labelled with source and page, then the question.
+            Context passages tagged ``[source:chunk_index]`` with their page, then the question.
         """
         passages = "\n\n".join(
-            f"[{number}] ({item.chunk.source}, page {item.chunk.page})\n"
-            f"{item.chunk.text}"
-            for number, item in enumerate(matches, 1)
+            f"[{item.chunk.source}:{item.chunk.chunk_index}] "
+            f"(page {item.chunk.page})\n{item.chunk.text}"
+            for item in matches
         )
         return f"Context:\n{passages}\n\nQuestion: {query}"
 

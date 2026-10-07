@@ -81,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     cli.add_argument(
         "--answer",
         action="store_true",
-        help="Answer the query with Gemini using the retrieved chunks",
+        help="Print only Gemini's answer and the chunks sent to it",
     )
     cli.add_argument(
         "--gemini-api",
@@ -127,10 +127,15 @@ def main(argv: list[str] | None = None) -> int:
             retriever=JuliaRetriever(args.model),
         )
         result = pipeline.retrieve(args.source, args.query, threshold=args.threshold)
-        report = result.to_dict()
         if args.answer:
             answerer = GeminiAnswerer(args.gemini_model, enterprise=not args.gemini_api)
-            report["answer"] = answerer.answer(result, max_chunks=args.max_chunks)
+            used = result.matches[: args.max_chunks]
+            report = {
+                "answer": answerer.answer(result, max_chunks=args.max_chunks),
+                "chunks": [item.to_dict() for item in used],
+            }
+        else:
+            report = result.to_dict()
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     except Exception as exc:

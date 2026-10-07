@@ -35,7 +35,7 @@ Optional flags:
 | `--threshold` | `0.5` | Keep every chunk whose relevance score is at least this value. Lower it to retrieve more chunks. |
 | `--model` | `Julia-1/` next to `example.py` | Local checkpoint directory. |
 | `--ocr-language` | `eng` | Tesseract language code for OCR, e.g. `ita`. |
-| `--answer` | off | Answer the query with Gemini using the retrieved chunks; adds an `answer` field to the report. |
+| `--answer` | off | Answer the query with Gemini. The output is reduced to the `answer` and the `chunks` sent to Gemini instead of the full report. |
 | `--gemini-api` | off | With `--answer`, use the Gemini API (`GEMINI_API_KEY`) instead of Vertex AI. |
 | `--gemini-model` | `gemini-3.5-flash-lite` | Gemini model used with `--answer`. |
 | `--max-chunks` | all | Send at most this many top-ranked chunks to Gemini. |
@@ -53,11 +53,13 @@ Strict encoding is enabled with the original 8,192-token context and 512-token q
 
 ## Answer generation with Gemini
 
-`--answer` sends the selected chunks (ranked by relevance, labelled with source and page) to Gemini through the [`google-genai`](https://pypi.org/project/google-genai/) SDK. The model is instructed to answer only from those passages and cite them as `[n]`; if nothing was retrieved, no call is made and a fixed message is returned.
+`--answer` sends the selected chunks (ranked by relevance, labelled with source and page) to Gemini through the [`google-genai`](https://pypi.org/project/google-genai/) SDK. The model is instructed to answer only from those passages and cite them as `[file.pdf:12]` (source path and chunk index); if nothing was retrieved, no call is made and a fixed message is returned.
 
 ```bash
 uv run python example.py --source ./sources --query "How does multi-head attention work?" --answer
 ```
+
+With `--answer`, stdout contains only `answer` and `chunks` (the `source` and `chunk_index` of each match a `[file.pdf:12]` citation; the chunks actually sent to Gemini, in ranked order, with source, page, text and score). The full report is not printed.
 
 `example.py` loads a `.env` file from the working directory (it is gitignored). Two backends are available:
 
@@ -116,7 +118,9 @@ To answer the query from the retrieved chunks:
 ```python
 from tinycrag import GeminiAnswerer
 
-answerer = GeminiAnswerer("gemini-3.5-flash-lite")  # Vertex AI; project/location from env or arguments
+answerer = GeminiAnswerer(
+    "gemini-3.5-flash-lite"
+)  # Vertex AI; project/location from env or arguments
 # answerer = GeminiAnswerer(enterprise=False, api_key="...")  # Gemini API
 print(answerer.answer(result, max_chunks=5))
 ```
