@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+.python-version
+
+# Julia-1
+Julia-1/
+
+# Input/output files
+sources/*.pdf
+*.json
+
+# Ruff
+.ruff_cache/

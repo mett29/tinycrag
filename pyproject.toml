@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinycrag"
+version = "0.1.0"
+description = "Minimal PDF chunk retrieval with LiteParse OCR and Julia-1"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "huggingface-hub>=1.3.0,<2.0",
+    "liteparse>=2.15.1",
+    "supersonic-julia",
+]
+
+[tool.uv.workspace]
+members = [
+    "Julia-1",
+]
+
+[tool.uv.sources]
+supersonic-julia = { workspace = true, editable = true }
+
+[tool.setuptools.packages.find]
+include = ["tinycrag*"]
+
+[tool.ruff]
+extend-exclude = ["Julia-1"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["D"]
+[dependency-groups]
+dev = [
+    "ruff>=0.16.10",
+]
