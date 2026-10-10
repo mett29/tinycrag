@@ -8,7 +8,17 @@ This project is inspired by [Jev](https://typesafe.ai/blog/introducing-system-on
 
 **Note: Julia-1 timing is computed on CPU.**
 
-![tinycrag_ui_example](img/tinycrag_ui_example.png)
+Question: *"is dropout used?"* on the "Attention Is All You Need" paper, both columns answered by `gpt-6-luna`.
+
+<p align="center">
+  <img src="img/tinycrag_ui_pageindex.png" width="710" alt="PageIndex chat column: the answer, model, timing and tool-call count">
+</p>
+
+<p align="center">
+  <img src="img/tinycrag_ui_julia.png" width="710" alt="Julia-1 column: the answer and the navigated tree with each section's relevance score">
+</p>
+
+[Full screenshot](img/tinycrag_ui_example.png)
 
 ## Setup
 
