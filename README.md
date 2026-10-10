@@ -1,8 +1,14 @@
 # tinycrag (tiny Classifier for RAG)
 
-A small Python library in `tinycrag/`, with an example CLI in `example.py`. It parses PDFs with [LiteParse](https://github.com/run-llama/liteparse/blob/main/packages/python/README.md), splits their text, and independently classifies **every chunk** for relevance to a query using the local [Julia-1](https://huggingface.co/SupersonicLabs/Julia-1) decision model. Optionally, the retrieved chunks can be passed to Gemini (Vertex AI by default, or the Gemini API) to generate a grounded answer.
+A small Python library in `tinycrag/`, with a Streamlit UI in `app.py`. [PageIndex](https://github.com/VectifyAI/PageIndex) turns each PDF into a tree of sections. The local [Julia-1](https://huggingface.co/SupersonicLabs/Julia-1) decision model then navigates that tree top-down, deciding at each section whether it is relevant to the query and worth descending into. An OpenAI model answers from the sections Julia selects. The UI compares this side by side with PageIndex's own chat, where an LLM agent searches the same tree.
 
-This project is inspired by [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev), a decision model from TypeSafe. Jev takes a shared piece of context and a typed question (pick one option, rate on a scale, or answer yes/no) and returns probabilities rather than generated text. I wanted to see how that style of judgment fits retrieval-augmented generation (RAG). Instead of embedding documents and ranking them by vector similarity, each chunk is treated as the context and the query as a yes/no question: "is this passage relevant?" The model returns a probability, and a threshold decides what to keep.
+This project is inspired by [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev), a decision model from TypeSafe. Jev takes a shared piece of context and a typed question (pick one option, rate on a scale, or answer yes/no) and returns probabilities rather than generated text. I wanted to see how that style of judgment fits retrieval-augmented generation (RAG). Instead of embedding documents and ranking them by vector similarity, or letting an LLM agent decide where to read, each section is treated as the context and the query as a yes/no question: "is this section relevant?" The model returns a probability, and a threshold decides what to keep.
+
+## Example
+
+**Note: Julia-1 timing is computed on CPU.**
+
+![tinycrag_ui_example](img/tinycrag_ui_example.png)
 
 ## Setup
 
@@ -15,135 +21,78 @@ uv run --no-project --with huggingface-hub python -c "from huggingface_hub impor
 uv sync
 ```
 
-If `Julia-1/` is already present, just run `uv sync`. This installs the project as an editable package, so `from tinycrag import ...` works from other scripts in the environment. It also installs the Ruff development dependency. LiteParse enables local OCR for pages that need it; no parsing API key is required. OCR may download language data on first use, so that run needs network access. Julia inference runs locally on CPU by default.
+If `Julia-1/` is already present, just run `uv sync`. Julia inference runs locally on CPU by default.
 
-## Run
+Put your OpenAI key in a `.env` file at the project root:
+
+```
+OPENAI_API_KEY=...
+```
+
+## Run the comparison UI
 
 ```bash
-uv run python example.py \
-  --source ./sources \
-  --chunk-size 300 \
-  --query "How does multi-head attention work?" > results.json
+uv run --group ui streamlit run app.py
 ```
 
-`--source` searches recursively for PDFs, including uppercase `.PDF` extensions. `--chunk-size` is a maximum number of **whitespace-separated words**, not characters or model tokens; its default is 300. Chunks have no overlap, stay within a page, and preserve document order. The last chunk on a page may be smaller. Whitespace is normalized, and there is no semantic splitting, embedding index, or top-k limit.
+1. Pick a PDF from `sources/` or upload one.
+2. Click **Build tree** the first time you use a PDF. PageIndex indexes it locally: the tree comes from the PDF layout, and the OpenAI model writes a summary for every section and refines the tree. Trees are stored in `.pageindex/` (gitignored) and reused by file name, so each PDF is indexed once.
+3. Ask a question and click **Run both**.
 
-Optional flags:
+One OpenAI model, `gpt-6-luna` by default, is used everywhere: to build new trees, for PageIndex chat, and to write the Julia column's answer. The sidebar sets the model and the Julia threshold. Changing the model doesn't rebuild existing trees.
 
-| Flag | Default | Purpose |
-| --- | --- | --- |
-| `--threshold` | `0.5` | Keep every chunk whose relevance score is at least this value. Lower it to retrieve more chunks. |
-| `--model` | `Julia-1/` next to `example.py` | Local checkpoint directory. |
-| `--ocr-language` | `eng` | Tesseract language code for OCR, e.g. `ita`. |
-| `--answer` | off | Answer the query with Gemini. The output is reduced to the `answer` and the `chunks` sent to Gemini instead of the full report. |
-| `--gemini-api` | off | With `--answer`, use the Gemini API (`GEMINI_API_KEY`) instead of Vertex AI. |
-| `--gemini-model` | `gemini-3.5-flash-lite` | Gemini model used with `--answer`. |
-| `--max-chunks` | all | Send at most this many top-ranked chunks to Gemini. |
+Both columns search the same tree with the same model, so the comparison is about how each one decides where to read:
 
-Progress goes to stderr; stdout contains one JSON report:
+- **PageIndex chat:** PageIndex's agentic chat. The model reads the tree and calls tools to fetch the pages it needs, then answers. The column lists its tool calls.
+- **Julia-1 tree navigation:** Julia scores the top-level sections against the query. Each section is shown to Julia as its title, page range and PageIndex summary, which describes the whole subtree. Julia descends only into the children of sections that reach the threshold, so a rejected section prunes everything under it. The own text of every selected section (the text not held by its children) goes to the model in document order, tagged `[file.pdf:node_id]` for citations. The column shows the tree with each section's score (🟢 selected, 🔴 pruned, ⚪ never visited) and the exact context sent to the model.
 
-- `matches`: all selected chunks, sorted by decreasing relevance score.
-- `classifications`: every chunk in source order, including rejected chunks for inspection.
-- Each chunk includes its relative source path, one-based page and per-document chunk index, text, model `choice`, `relevance_score`, and threshold-based `selected` flag.
-- Counts and separate parsing, model loading, and classification timings.
-
-The score is Julia's softmax probability for the `relevant` choice, not a calibrated measure of retrieval quality. `selected` follows your threshold and may differ from the model's winning `choice` when the threshold changes. The model is loaded once per CLI run and reused for all chunks. Parsing and classification are repeated on each CLI run; there is no persistent cache.
-
-Strict encoding is enabled with the original 8,192-token context and 512-token question/options budget. Oversized inputs fail explicitly rather than silently dropping text; reduce the chunk size or shorten the query if needed. Parsing errors also fail the run rather than returning incomplete retrieval results. Blank pages create no chunks; PDFs without extractable text produce a warning, and a folder with no extracted text fails.
-
-## Answer generation with Gemini
-
-`--answer` sends the selected chunks (ranked by relevance, labelled with source and page) to Gemini through the [`google-genai`](https://pypi.org/project/google-genai/) SDK. The model is instructed to answer only from those passages and cite them as `[file.pdf:12]` (source path and chunk index); if nothing was retrieved, no call is made and a fixed message is returned.
-
-```bash
-uv run python example.py --source ./sources --query "How does multi-head attention work?" --answer
-```
-
-With `--answer`, stdout contains only `answer` and `chunks` (the `source` and `chunk_index` of each match a `[file.pdf:12]` citation; the chunks actually sent to Gemini, in ranked order, with source, page, text and score). The full report is not printed.
-
-`example.py` loads a `.env` file from the working directory (it is gitignored). Two backends are available:
-
-- **Vertex AI (default):** uses Application Default Credentials (`gcloud auth application-default login`) and needs `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`.
-- **Gemini API:** pass `--gemini-api` and set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
-
-```
-GOOGLE_CLOUD_PROJECT=my-project
-GOOGLE_CLOUD_LOCATION=eu
-# GEMINI_API_KEY=...   # only for --gemini-api
-```
+The score is Julia's softmax probability for `relevant`, not a calibrated measure of retrieval quality. Pruning is strict, so a parent scored just under the threshold hides all its subsections, even relevant ones. If an answer misses something, check the navigation tree and try a lower threshold.
 
 ## Python API
 
-All public classes are available from `tinycrag`. The components expose typed results and comprehensive docstrings describing arguments, return values, resource ownership, and failure behavior. Importing the package does not load LiteParse, PyTorch, or model weights.
+All public classes are available from `tinycrag`. Importing the package does not load PageIndex, PyTorch, or model weights.
 
 ```python
-from tinycrag import JuliaRetriever, PdfLoader, RetrievalPipeline, WordChunker
+from dotenv import load_dotenv
 
-pipeline = RetrievalPipeline(
-    loader=PdfLoader(WordChunker(chunk_size=300), ocr_language="eng"),
-    retriever=JuliaRetriever(model_path="Julia-1", device="cpu"),
+from tinycrag import (
+    JuliaRetriever,
+    JuliaTreeNavigator,
+    OpenAIAnswerer,
+    PageIndexDocuments,
 )
 
-result = pipeline.retrieve(
-    source="sources",
-    query="How does multi-head attention work?",
-    threshold=0.5,
+load_dotenv(".env")
+query = "How does multi-head attention work?"
+
+documents = PageIndexDocuments(".pageindex")  # gpt-6-luna for indexing and chat
+doc_id = documents.index("sources/paper.pdf")  # reuses an existing tree by file name
+roots = documents.tree(doc_id)
+
+navigation = JuliaTreeNavigator(JuliaRetriever("Julia-1")).navigate(
+    roots, query, threshold=0.5
 )
+print(OpenAIAnswerer("gpt-6-luna").answer(query, navigation.passages()))
 
-for match in result.matches:
-    print(match.chunk.source, match.chunk.page, match.relevance_score)
-    print(match.chunk.text)
-
-report = result.to_dict()  # Same JSON-compatible schema as the example CLI.
+print(documents.chat(query, doc_id).answer)  # PageIndex's own chat, for comparison
 ```
 
-Reusing the pipeline keeps Julia's engine resident across calls. `retrieve` parses PDFs on each call. To extract a corpus once and classify it against multiple queries, use the components separately:
-
-```python
-from tinycrag import JuliaRetriever, PdfLoader, WordChunker
-
-corpus = PdfLoader(WordChunker(300)).load("sources")
-retriever = JuliaRetriever("Julia-1")
-
-for query in ["How does multi-head attention work?", "What optimizer was used?"]:
-    classifications = retriever.classify(corpus.chunks, query, threshold=0.5)
-    selected = [item for item in classifications if item.selected]
-    print(query, len(selected))
-```
-
-`classify` returns all decisions in input order. `RetrievalResult.matches` returns every selected decision in descending score order. No top-k cutoff is applied. `ChunkClassification.chunk` retains the text, relative source path, page, and chunk index.
-
-To answer the query from the retrieved chunks:
-
-```python
-from tinycrag import GeminiAnswerer
-
-answerer = GeminiAnswerer(
-    "gemini-3.5-flash-lite"
-)  # Vertex AI; project/location from env or arguments
-# answerer = GeminiAnswerer(enterprise=False, api_key="...")  # Gemini API
-print(answerer.answer(result, max_chunks=5))
-```
-
-The client is created lazily, so constructing `GeminiAnswerer` needs no credentials. Mixing `enterprise=True` with `api_key`, or `enterprise=False` with `project`/`location`, raises `ValueError`.
+`GeminiAnswerer` has the same `answer(query, passages)` interface if you want to answer with Gemini instead. It uses Vertex AI by default (Application Default Credentials, plus `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`); pass `enterprise=False` to use a Gemini API key.
 
 | Class | Responsibility |
 | --- | --- |
-| `WordChunker` | Split text into fixed-size, non-overlapping word chunks. |
-| `PdfLoader` | Discover PDFs, run LiteParse/OCR, and return a `PdfCorpus`. |
-| `JuliaRetriever` | Lazily load Julia once and classify supplied chunks. |
-| `GeminiAnswerer` | Build a grounded prompt from `RetrievalResult.matches` and generate an answer with Gemini. |
-| `RetrievalPipeline` | Compose extraction and classification into a `RetrievalResult`. |
-| `Chunk`, `PdfCorpus`, `ChunkClassification` | Immutable data objects for text and decisions. |
-| `RetrievalResult`, `RetrievalTimings` | Ranked matches, all classifications, serialization, and stage timings. |
+| `PageIndexDocuments` | Index PDFs into local PageIndex trees, load them as `TreeNode`s, and run PageIndex chat. |
+| `JuliaTreeNavigator` | Navigate trees level by level with Julia, returning a `TreeRetrievalResult` of `NodeDecision`s. |
+| `JuliaRetriever` | Lazily load Julia once and score text for relevance to a query. |
+| `OpenAIAnswerer`, `GeminiAnswerer` | Answer a query from tagged `Passage`s, citing them by tag. |
+| `PageIndexAnswer`, `ToolCall` | PageIndex chat's answer, model, timing and tool calls. |
+| `TreeNode`, `NodeDecision`, `TreeRetrievalResult`, `Passage` | Immutable data objects for tree sections, decisions, and answer context. |
 
-The library's default model path is `Julia-1/` relative to the working directory. Pass an explicit path when using it from another location. `JuliaRetriever.load()` eagerly prepares and returns the engine; subsequent calls return the same engine without loading it again. Calling `classify` with an empty iterable returns an empty tuple without loading weights.
-
-For custom integration or testing, `PdfLoader(parser=...)` accepts an existing LiteParse instance, and `JuliaRetriever(engine=...)` accepts an object implementing the exported `DecisionEngine` protocol. The caller owns injected dependencies and their configuration; the loader does not close an injected parser. Internally created parsers are closed on success and failure. Library classes emit standard Python logging records; `example.py` configures progress logging to stderr.
+Julia uses strict encoding with an 8,192-token context and a 512-token question/options budget, so oversized inputs fail rather than being silently truncated. Sections without a PageIndex summary are judged on the first 400 words of their own text. The library's default Julia path is `Julia-1/` relative to the working directory. `JuliaRetriever(engine=...)` accepts any object implementing the exported `DecisionEngine` protocol, for reuse or testing. Library classes emit standard Python logging records.
 
 ## Development
 
-Ruff checks include imports, common Python errors, and Google-style docstrings for the public library and CLI. The downloaded `Julia-1/` dependency is excluded from project linting.
+Ruff checks include imports, common Python errors, and Google-style docstrings. The downloaded `Julia-1/` dependency is excluded from project linting.
 
 ```bash
 uv run ruff check .
@@ -151,4 +100,4 @@ uv run ruff format --check .
 uv run python -m unittest discover -s tests -v
 ```
 
-To apply formatting, run `uv run ruff format .`. The offline tests cover chunk boundaries, PDF discovery and parser ownership, model reuse, threshold selection, report serialization, and CLI behavior without loading real weights.
+To apply formatting, run `uv run ruff format .`. The offline tests cover Julia scoring and model reuse, tree navigation and pruning, and answer prompts, without loading real weights or calling any API.

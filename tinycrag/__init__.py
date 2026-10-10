@@ -1,33 +1,28 @@
-"""Reusable PDF retrieval with LiteParse OCR and Julia-1 decision classification.
+"""Julia-1 navigation of PageIndex document trees, compared with PageIndex chat.
 
-Use ``RetrievalPipeline`` for a complete folder-to-results workflow, or compose
-``PdfLoader``, ``WordChunker``, and ``JuliaRetriever`` independently. Importing
-this package does not load OCR dependencies, PyTorch, or model weights.
+``PageIndexDocuments`` builds and stores PageIndex trees and runs PageIndex's own
+chat. ``JuliaTreeNavigator`` walks a tree top-down with Julia-1, and
+``OpenAIAnswerer`` or ``GeminiAnswerer`` answers from the selected sections.
+Importing this package does not load PageIndex, PyTorch, or model weights.
 """
 
-from .chunking import WordChunker
-from .generation import GeminiAnswerer
-from .models import (
-    Chunk,
-    ChunkClassification,
-    PdfCorpus,
-    RetrievalResult,
-    RetrievalTimings,
-)
-from .parsing import PdfLoader
-from .pipeline import RetrievalPipeline
+from .generation import GeminiAnswerer, OpenAIAnswerer
+from .indexing import PageIndexAnswer, PageIndexDocuments, ToolCall
+from .models import Passage
 from .retrieval import DecisionEngine, JuliaRetriever
+from .tree import JuliaTreeNavigator, NodeDecision, TreeNode, TreeRetrievalResult
 
 __all__ = [
-    "Chunk",
-    "ChunkClassification",
     "DecisionEngine",
     "GeminiAnswerer",
     "JuliaRetriever",
-    "PdfCorpus",
-    "PdfLoader",
-    "RetrievalPipeline",
-    "RetrievalResult",
-    "RetrievalTimings",
-    "WordChunker",
+    "JuliaTreeNavigator",
+    "NodeDecision",
+    "OpenAIAnswerer",
+    "PageIndexAnswer",
+    "PageIndexDocuments",
+    "Passage",
+    "ToolCall",
+    "TreeNode",
+    "TreeRetrievalResult",
 ]

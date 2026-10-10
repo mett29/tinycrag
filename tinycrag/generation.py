@@ -1,17 +1,95 @@
-"""Answer generation from retrieved chunks with Gemini via the Google GenAI SDK."""
+"""Grounded answer generation from retrieved passages with OpenAI or Gemini."""
 
-from .models import ChunkClassification, RetrievalResult
+from collections.abc import Sequence
+
+from .models import Passage
 
 DEFAULT_SYSTEM_INSTRUCTION = (
     "You answer questions using only the context passages provided, each labelled "
-    "with a bracketed source:chunk_index tag. Cite the passages you rely on by "
-    "copying that tag exactly, e.g. [report.pdf:12]. If the passages do not contain the "
+    "with a bracketed source:id tag. Cite the passages you rely on by "
+    "copying that tag exactly, e.g. [report.pdf:0007]. If the passages do not contain the "
     "answer, say so instead of guessing."
 )
 
 
+NO_CONTEXT_ANSWER = "No relevant passages were retrieved, so I cannot answer."
+
+
+def build_prompt(query: str, passages: Sequence[Passage]) -> str:
+    """Format the query and context passages into a single prompt.
+
+    Args:
+        query: The user's question.
+        passages: Context in the order it should be presented.
+
+    Returns:
+        Passages tagged ``[source:id]`` with their location, then the question.
+    """
+    context = "\n\n".join(
+        f"[{item.tag}] ({item.location})\n{item.text}" for item in passages
+    )
+    return f"Context:\n{context}\n\nQuestion: {query}"
+
+
+class OpenAIAnswerer:
+    """Answer a query from retrieved passages with an OpenAI model.
+
+    Uses the Responses API with ``OPENAI_API_KEY`` from the environment unless an
+    ``api_key`` is given. The client is created lazily on first use.
+    """
+
+    def __init__(
+        self,
+        model: str = "gpt-6-luna",
+        *,
+        api_key: str | None = None,
+        system_instruction: str = DEFAULT_SYSTEM_INSTRUCTION,
+    ) -> None:
+        """Configure the model and prompt.
+
+        Args:
+            model: OpenAI model name.
+            api_key: OpenAI API key; defaults to ``OPENAI_API_KEY``.
+            system_instruction: System prompt guiding grounded answering.
+        """
+        self.model = model
+        self.system_instruction = system_instruction
+        self._api_key = api_key
+        self._client = None
+
+    def answer(self, query: str, passages: Sequence[Passage]) -> str:
+        """Answer a query from tagged passages, e.g. selected document tree nodes.
+
+        Args:
+            query: The user's question.
+            passages: Context passages; the model cites them by their ``tag``.
+
+        Returns:
+            The model's answer text, or a fixed message without calling the model
+            when ``passages`` is empty.
+
+        Raises:
+            RuntimeError: If the model returns no text.
+            Exception: If the client or the API call fails.
+        """
+        if not passages:
+            return NO_CONTEXT_ANSWER
+        if self._client is None:
+            from openai import OpenAI
+
+            self._client = OpenAI(api_key=self._api_key)
+        response = self._client.responses.create(
+            model=self.model,
+            instructions=self.system_instruction,
+            input=build_prompt(query, passages),
+        )
+        if not response.output_text:
+            raise RuntimeError("OpenAI returned no text")
+        return response.output_text
+
+
 class GeminiAnswerer:
-    """Answer a query from retrieved chunks using Gemini.
+    """Answer a query from retrieved passages using Gemini.
 
     By default the client talks to Gemini on Vertex AI (``enterprise=True``) using
     Application Default Credentials, with project and location taken from the
@@ -73,51 +151,29 @@ class GeminiAnswerer:
                 self._client = genai.Client(api_key=self._api_key)
         return self._client
 
-    @staticmethod
-    def build_prompt(query: str, matches: tuple[ChunkClassification, ...]) -> str:
-        """Format the query and retrieved chunks into a single prompt.
+    def answer(self, query: str, passages: Sequence[Passage]) -> str:
+        """Answer a query from tagged passages, e.g. selected document tree nodes.
 
         Args:
             query: The user's question.
-            matches: Selected chunks, in the order they should be presented.
+            passages: Context passages; the model cites them by their ``tag``.
 
         Returns:
-            Context passages tagged ``[source:chunk_index]`` with their page, then the question.
-        """
-        passages = "\n\n".join(
-            f"[{item.chunk.source}:{item.chunk.chunk_index}] "
-            f"(page {item.chunk.page})\n{item.chunk.text}"
-            for item in matches
-        )
-        return f"Context:\n{passages}\n\nQuestion: {query}"
-
-    def answer(self, result: RetrievalResult, *, max_chunks: int | None = None) -> str:
-        """Answer the retrieval query using the selected chunks as context.
-
-        Args:
-            result: Retrieval report; its ``matches`` (ranked by relevance) are used.
-            max_chunks: Optional cap on how many top-ranked chunks to send.
-
-        Returns:
-            The model's answer text. If nothing was retrieved, a fixed message is
-            returned without calling the model.
+            The model's answer text, or a fixed message without calling the model
+            when ``passages`` is empty.
 
         Raises:
-            ValueError: If ``max_chunks`` is not a positive integer.
             RuntimeError: If the model returns no text.
             Exception: If the client or the API call fails.
         """
-        if max_chunks is not None and max_chunks < 1:
-            raise ValueError("max_chunks must be a positive integer")
-        matches = result.matches[:max_chunks]
-        if not matches:
-            return "No relevant passages were retrieved, so I cannot answer."
+        if not passages:
+            return NO_CONTEXT_ANSWER
 
         from google.genai import types
 
         response = self._get_client().models.generate_content(
             model=self.model,
-            contents=self.build_prompt(result.query, matches),
+            contents=build_prompt(query, passages),
             config=types.GenerateContentConfig(
                 system_instruction=self.system_instruction,
                 temperature=self.temperature,

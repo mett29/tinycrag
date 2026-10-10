@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# MacOS
+.DS_Store
+
 # Virtual environments
 .venv
 
@@ -20,6 +23,9 @@ Julia-1/
 # Input/output files
 sources/*.pdf
 *.json
+
+# PageIndex local store
+.pageindex/
 
 # Ruff
 .ruff_cache/
